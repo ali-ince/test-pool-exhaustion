@@ -3,12 +3,13 @@ package com.neo4j.opsmanager.testpoolexhaustion;
 import org.junit.jupiter.api.*;
 import org.neo4j.driver.ConnectionPoolMetrics;
 import org.neo4j.driver.Driver;
+import org.neo4j.harness.Neo4j;
+import org.neo4j.harness.Neo4jBuilders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.neo4j.DataNeo4jTest;
 import org.springframework.data.neo4j.core.ReactiveNeo4jTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.Neo4jContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -19,18 +20,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @DataNeo4jTest
 public class TestConnectionLeakage {
-    private static Neo4jContainer<?> neo4jContainer;
+    private static Neo4j embeddedServer;
 
     @BeforeAll
     static void initializeNeo4j() {
-        neo4jContainer = new Neo4jContainer<>("neo4j:4.4.4-community")
-                .withAdminPassword("somePassword");
-        neo4jContainer.start();
+        embeddedServer = Neo4jBuilders.newInProcessBuilder()
+                .withDisabledServer()
+                .build();
     }
 
     @AfterAll
     static void stopNeo4j() {
-        neo4jContainer.close();
+        embeddedServer.close();
     }
 
     private int inUseConnectionsBefore;
@@ -84,9 +85,9 @@ public class TestConnectionLeakage {
     @DynamicPropertySource
     static void neo4jProperties(DynamicPropertyRegistry registry) {
 
-        registry.add("spring.neo4j.uri", neo4jContainer::getBoltUrl);
+        registry.add("spring.neo4j.uri", embeddedServer::boltURI);
         registry.add("spring.neo4j.authentication.username", () -> "neo4j");
-        registry.add("spring.neo4j.authentication.password", neo4jContainer::getAdminPassword);
+        registry.add("spring.neo4j.authentication.password", () -> null);
         registry.add("spring.neo4j.pool.metrics-enabled", () -> true);
     }
 
