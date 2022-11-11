@@ -15,6 +15,9 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -24,9 +27,8 @@ public class TestConnectionLeakage {
 
     @BeforeAll
     static void initializeNeo4j() {
-        embeddedServer = Neo4jBuilders.newInProcessBuilder()
-                .withDisabledServer()
-                .build();
+        embeddedServer =
+                Neo4jBuilders.newInProcessBuilder().withDisabledServer().build();
     }
 
     @AfterAll
@@ -42,14 +44,29 @@ public class TestConnectionLeakage {
      * @param neo4j
      */
     @BeforeEach
-    void createData(@Autowired ReactiveNeo4jTemplate neo4j) {
-        var count = Flux.fromIterable(List.of(0, 2, 4, 6, 8, 10))
-                .flatMap(id -> neo4j.save(new Person(String.valueOf(id))))
-                .count();
+    void createData(@Autowired Driver neo4j) {
+        try (var session = neo4j.session()) {
+            session.run(
+                            "UNWIND $list as id CREATE (:Person {id: id})",
+                            Map.of(
+                                    "list",
+                                    IntStream.of(0, 2, 4, 6, 8, 10)
+                                            .mapToObj(i -> String.valueOf(i))
+                                            .collect(Collectors.toList())))
+                    .consume();
+        }
+    }
 
-        StepVerifier.create(count)
-                .expectNext(6L)
-                .verifyComplete();
+    /**
+     * Clean-up
+     *
+     * @param neo4j
+     */
+    @AfterEach
+    void cleanup(@Autowired Driver neo4j) {
+        try (var session = neo4j.session()) {
+            session.run("MATCH (n:Person) DELETE n").consume();
+        }
     }
 
     /**
@@ -60,8 +77,7 @@ public class TestConnectionLeakage {
      */
     @BeforeEach
     void captureInUseConnections(@Autowired Driver driver) {
-        inUseConnectionsBefore = driver.metrics().connectionPoolMetrics()
-                .stream()
+        inUseConnectionsBefore = driver.metrics().connectionPoolMetrics().stream()
                 .mapToInt(ConnectionPoolMetrics::inUse)
                 .sum();
     }
@@ -74,8 +90,7 @@ public class TestConnectionLeakage {
      */
     @AfterEach
     void assertInUseConnections(@Autowired Driver driver) {
-        var inUseConnectionsAfter = driver.metrics().connectionPoolMetrics()
-                .stream()
+        var inUseConnectionsAfter = driver.metrics().connectionPoolMetrics().stream()
                 .mapToInt(ConnectionPoolMetrics::inUse)
                 .sum();
 
@@ -103,9 +118,7 @@ public class TestConnectionLeakage {
         var people = Flux.fromIterable(List.of(0, 2, 4, 6, 8, 10))
                 .flatMap(id -> neo4j.findById(String.valueOf(id), Person.class));
 
-        StepVerifier.create(people)
-                .expectNextCount(6)
-                .verifyComplete();
+        StepVerifier.create(people).expectNextCount(6).verifyComplete();
     }
 
     /**
@@ -120,13 +133,13 @@ public class TestConnectionLeakage {
     @Test
     public void readWithSubStreamErrorConcurrencyOne(@Autowired ReactiveNeo4jTemplate neo4j) {
         var people = Flux.fromIterable(List.of(10, 9, 7, 5, 3, 1))
-                .flatMap(id -> neo4j.findById(String.valueOf(id), Person.class)
-                        .switchIfEmpty(Mono.defer(() -> Mono.error(new RuntimeException(String.format("Person[id=%s] does not exist", id))))), 1);
+                .flatMap(
+                        id -> neo4j.findById(String.valueOf(id), Person.class)
+                                .switchIfEmpty(Mono.defer(() -> Mono.error(
+                                        new RuntimeException(String.format("Person[id=%s] does not exist", id))))),
+                        1);
 
-        StepVerifier.create(people)
-                .consumeNextWith(p -> assertThat(p.getId()).isEqualTo("10"))
-                .expectError()
-                .verify();
+        StepVerifier.create(people).consumeNextWith(p -> {}).expectError().verify();
     }
 
     /**
@@ -142,11 +155,9 @@ public class TestConnectionLeakage {
     public void readWithSubStreamErrorConcurrencyDefault(@Autowired ReactiveNeo4jTemplate neo4j) {
         var people = Flux.fromIterable(List.of(10, 9, 7, 5, 3, 1))
                 .flatMap(id -> neo4j.findById(String.valueOf(id), Person.class)
-                        .switchIfEmpty(Mono.defer(() -> Mono.error(new RuntimeException(String.format("Person[id=%s] does not exist", id))))));
+                        .switchIfEmpty(Mono.defer(() ->
+                                Mono.error(new RuntimeException(String.format("Person[id=%s] does not exist", id))))));
 
-        StepVerifier.create(people)
-                .expectError()
-                .verify();
+        StepVerifier.create(people).consumeNextWith(p -> {}).expectError().verify();
     }
-
 }
